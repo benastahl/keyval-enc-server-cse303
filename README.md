@@ -1,8 +1,4 @@
 # Assignment #4: Adding Incremental Persistence
-# Originally created by Prof. Spear
-
-The purpose of this assignment is to gain experience with nuanced code for
-persistence.
 
 ## Do This First
 
