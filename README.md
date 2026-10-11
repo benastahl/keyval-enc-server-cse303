@@ -10,6 +10,31 @@ Prof. Spear. Language: C++17 · Linux · OpenSSL · pthreads.
 
 ## How It Works
 
+The diagram below follows a single upsert that updates an existing key. The
+log record is written and `fsync`'d while the bucket lock is still held, before
+the client gets its response.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as MyStorage
+    participant M as Hash map bucket
+    participant P as persist.cc
+    participant D as Data file
+
+    C->>S: KVU (key, value)
+    S->>M: upsert(key, value, on_insert, on_update)
+    rect rgba(128, 128, 128, 0.15)
+        Note over M,D: Bucket lock held
+        M->>M: Update value in memory
+        M->>P: on_update lambda calls log_sv(KVU_, key, value)
+        P->>D: One write() of the whole record
+        P->>D: fsync()
+    end
+    M-->>S: Lock released
+    S-->>C: OK_UPDATE
+```
+
 **Atomic, ordered log appends.** The hash map runs a caller-supplied lambda
 *inside* the bucket's critical section. Every mutating operation (insert,
 upsert, delete, set-profile) passes a lambda that writes its log record. The
@@ -32,6 +57,15 @@ so it never reads the whole file into memory.
 **Compaction.** `SAVE` writes a compact snapshot to `<file>.tmp`, `fsync`s it,
 and `rename()`s it over the original. The rename is atomic, so a crash
 mid-save leaves either the old file or the new one, never a partial file.
+
+### Data File Lifecycle
+
+```mermaid
+flowchart LR
+    req(["Each change<br/>REG, SETP, KVI, KVU, KVD"]) -->|"append record + fsync"| file
+    file["Data file<br/>snapshot + appended diffs"] -->|"startup: load_file<br/>replays records in order"| mem[("In-memory<br/>hash maps")]
+    mem -->|"SAVE: write .tmp,<br/>fsync, rename"| file
+```
 
 ### On-Disk Record Format
 
