@@ -11,7 +11,7 @@
 /// file.
 ///
 /// @param logfile The file to write into
-/// @param delim   The 8-byte string that starts the log entry
+/// @param delim   The 4-byte string that starts the log entry
 /// @param s       The string to add to the message
 /// @param v1      The first vector to add to the message
 /// @param v2      The second vector to add to the message
@@ -23,7 +23,7 @@ void log_svv0(FILE *logfile, const std::string &delim, const std::string &s,
 /// This variant puts a delimiter, a string, and a vector into the file.
 ///
 /// @param logfile The file to write into
-/// @param delim   The 8-byte string that starts the log entry
+/// @param delim   The 4-byte string that starts the log entry
 /// @param s1      The string to add to the message
 /// @param v1      The vector to add to the message
 void log_sv(FILE *logfile, const std::string &delim, const std::string &s1,
@@ -34,6 +34,6 @@ void log_sv(FILE *logfile, const std::string &delim, const std::string &s1,
 /// This variant puts a delimiter and a string into the file
 ///
 /// @param logfile The file to write into
-/// @param delim   The 8-byte string that starts the log entry
+/// @param delim   The 4-byte string that starts the log entry
 /// @param s1      The string to add to the message
 void log_s(FILE *logfile, const std::string &delim, const std::string &s1);

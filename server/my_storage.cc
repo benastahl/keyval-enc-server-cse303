@@ -38,6 +38,28 @@ class MyStorage : public Storage {
   /// The open file
   FILE *storage_file = nullptr;
 
+  /// Compute SHA-256(salt || pass)
+  ///
+  /// @param salt The per-user salt
+  /// @param pass The plaintext password
+  ///
+  /// @return The 32-byte password hash
+  static vector<uint8_t> hash_password(const vector<uint8_t> &salt,
+                                       const string &pass) {
+    vector<uint8_t> buf;
+    buf.reserve(salt.size() + pass.size());
+    buf.insert(buf.end(), salt.begin(), salt.end());
+    buf.insert(buf.end(), pass.begin(), pass.end());
+    vector<uint8_t> hash(SHA256_DIGEST_LENGTH);
+    SHA256(buf.data(), buf.size(), hash.data());
+    return hash;
+  }
+
+  /// Check a password against an auth table entry
+  static bool password_matches(const AuthTableEntry &e, const string &pass) {
+    return hash_password(e.salt, pass) == e.pass_hash;
+  }
+
 public:
   /// Construct an empty object and specify the file from which it should be
   /// loaded.  To avoid exceptions and errors in the constructor, the act of
@@ -77,15 +99,7 @@ public:
     if (RAND_bytes(salt.data(), LEN_SALT) != 1)
       return {false, RES_ERR_SERVER, {}};
 
-    vector<uint8_t> pass_hash(SHA256_DIGEST_LENGTH);
-    {
-      vector<uint8_t> buf;
-      buf.reserve(salt.size() + pass.size());
-      buf.insert(buf.end(), salt.begin(), salt.end());
-      buf.insert(buf.end(), reinterpret_cast<const uint8_t *>(pass.data()),
-                 reinterpret_cast<const uint8_t *>(pass.data()) + pass.size());
-      SHA256(buf.data(), buf.size(), pass_hash.data());
-    }
+    vector<uint8_t> pass_hash = hash_password(salt, pass);
 
     AuthTableEntry entry;
     entry.username = user;
@@ -116,14 +130,7 @@ public:
     bool user_found = false;
     bool pass_ok = false;
     user_found = auth_table->do_with(user, [&](AuthTableEntry &e) {
-      vector<uint8_t> ph(SHA256_DIGEST_LENGTH);
-      vector<uint8_t> buf;
-      buf.reserve(e.salt.size() + pass.size());
-      buf.insert(buf.end(), e.salt.begin(), e.salt.end());
-      buf.insert(buf.end(), reinterpret_cast<const uint8_t *>(pass.data()),
-                 reinterpret_cast<const uint8_t *>(pass.data()) + pass.size());
-      SHA256(buf.data(), buf.size(), ph.data());
-      if (ph == e.pass_hash) {
+      if (password_matches(e, pass)) {
         pass_ok = true;
         e.content = content;
         if (storage_file)
@@ -146,21 +153,9 @@ public:
   ///         an error
   virtual result_t get_user_data(const string &user, const string &pass,
                                  const string &who) {
-    bool auth_ok = false;
-    if (!auth_table->do_with_readonly(user, [&](const AuthTableEntry &e) {
-          vector<uint8_t> ph(SHA256_DIGEST_LENGTH);
-          vector<uint8_t> buf;
-          buf.reserve(e.salt.size() + pass.size());
-          buf.insert(buf.end(), e.salt.begin(), e.salt.end());
-          buf.insert(buf.end(), reinterpret_cast<const uint8_t *>(pass.data()),
-                     reinterpret_cast<const uint8_t *>(pass.data()) +
-                         pass.size());
-          SHA256(buf.data(), buf.size(), ph.data());
-          auth_ok = (ph == e.pass_hash);
-        }))
-      return {false, RES_ERR_LOGIN, {}};
-    if (!auth_ok)
-      return {false, RES_ERR_LOGIN, {}};
+    auto a = auth(user, pass);
+    if (!a.succeeded)
+      return a;
 
     vector<uint8_t> out;
     bool found = auth_table->do_with_readonly(
@@ -180,21 +175,9 @@ public:
   ///
   /// @return A result tuple, as described in storage.h
   virtual result_t get_all_users(const string &user, const string &pass) {
-    bool auth_ok = false;
-    if (!auth_table->do_with_readonly(user, [&](const AuthTableEntry &e) {
-          vector<uint8_t> ph(SHA256_DIGEST_LENGTH);
-          vector<uint8_t> buf;
-          buf.reserve(e.salt.size() + pass.size());
-          buf.insert(buf.end(), e.salt.begin(), e.salt.end());
-          buf.insert(buf.end(), reinterpret_cast<const uint8_t *>(pass.data()),
-                     reinterpret_cast<const uint8_t *>(pass.data()) +
-                         pass.size());
-          SHA256(buf.data(), buf.size(), ph.data());
-          auth_ok = (ph == e.pass_hash);
-        }))
-      return {false, RES_ERR_LOGIN, {}};
-    if (!auth_ok)
-      return {false, RES_ERR_LOGIN, {}};
+    auto a = auth(user, pass);
+    if (!a.succeeded)
+      return a;
 
     string names;
     bool first = true;
@@ -219,16 +202,8 @@ public:
   /// @return A result tuple, as described in storage.h
   virtual result_t auth(const string &user, const string &pass) {
     bool auth_ok = false;
-    bool found = auth_table->do_with_readonly(user, [&](const AuthTableEntry &e) {
-      vector<uint8_t> ph(SHA256_DIGEST_LENGTH);
-      vector<uint8_t> buf;
-      buf.reserve(e.salt.size() + pass.size());
-      buf.insert(buf.end(), e.salt.begin(), e.salt.end());
-      buf.insert(buf.end(), reinterpret_cast<const uint8_t *>(pass.data()),
-                 reinterpret_cast<const uint8_t *>(pass.data()) + pass.size());
-      SHA256(buf.data(), buf.size(), ph.data());
-      auth_ok = (ph == e.pass_hash);
-    });
+    bool found = auth_table->do_with_readonly(
+        user, [&](const AuthTableEntry &e) { auth_ok = password_matches(e, pass); });
     if (!found || !auth_ok)
       return {false, RES_ERR_LOGIN, {}};
     return {true, RES_OK, {}};
@@ -393,7 +368,7 @@ public:
     bool ok = true;
 
     auth_table->do_all_readonly(
-        [&](const string k, const AuthTableEntry &e) {
+        [&](const string, const AuthTableEntry &e) {
           vector<uint8_t> buf;
           buf.reserve(4 + 16 + e.username.size() + e.salt.size() +
                       e.pass_hash.size() + e.content.size() + 4);
